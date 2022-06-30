@@ -40,7 +40,6 @@ jobs:
     - name: Build and Test
       shell: cmd
       run: |
-        set "RUSTFLAGS=-D warnings"
         set "RUSTFMT_CI=1"
 
         :: Print version information
