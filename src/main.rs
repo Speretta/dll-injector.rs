@@ -104,10 +104,7 @@ fn app(cx: Scope) -> Element {
 }
 
 unsafe fn show_all_process(){
-        
-
-    let hProcess = OpenProcess(PROCESS_QUERY_INFORMATION |
-        PROCESS_VM_READ, false, 0);
+    todo!()
 }
 
 
