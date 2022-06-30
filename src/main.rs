@@ -1,6 +1,10 @@
-use std::{ffi::c_void, fmt, ptr, slice};
+pub mod error;
+
+
+use std::{ffi::c_void, ptr, slice};
 
 use dioxus::{prelude::*, desktop::tao::dpi::LogicalSize};
+use error::{InjectorError, FileSelectorError};
 use windows::{
     core::GUID,
     Win32::{
@@ -10,10 +14,10 @@ use windows::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL,
                 COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
             },
-            Diagnostics::Debug::WriteProcessMemory,
+            Diagnostics::Debug::{WriteProcessMemory, SymEnumProcesses},
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE},
-            Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS},
+            Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
             WindowsProgramming::INFINITE,
         },
         UI::Shell::{IFileDialog, SIGDN_FILESYSPATH},
@@ -34,18 +38,16 @@ fn app(cx: Scope) -> Element {
     let path = use_state(&cx, || String::new());
     let debug_value = use_state(&cx, || String::new());
     cx.render(rsx! {
+        style { [include_str!("./assets/main.css")] }
         div {
-                display: "flex",
-                justify_content: "center",
+                id: "maindiv",
             ul{
-                padding: "0px",
-                list_style_type: "none",
+                id: "listparent",
+                
                 li {
-                    display: "flex",
-                    justify_content: "center",
-                    margin_top: "5px",
-                    margin_bottom: "5px",
+                    class: "listchild",
                     input {
+                        placeholder: "PID number",
                         r#type: "number",
                         onchange:move |event|{
                             pid.set(event.value.parse().unwrap());
@@ -54,30 +56,26 @@ fn app(cx: Scope) -> Element {
                 }
 
                 li {
-                    display: "flex",
-                    justify_content: "center",
-                    margin_top: "5px",
-                    margin_bottom: "5px",
-                    input {
-                        r#type: "button",
-                        value: "Select DLL",
+                    class: "listchild",
+                    button {
+                        id: "selectdllbutton",
                         onclick: move |_|{
-                            match show_file_dialog(){
-                                Ok(path_text) => {path.set(path_text.clone()); debug_value.set(path_text);},
-                                Err(_) => debug_value.set(String::from("COM Error")),
+                            unsafe{
+                                match show_file_dialog(){
+                                    Ok(path_text) => {path.set(path_text.clone()); debug_value.set(path_text);},
+                                    Err(e) => {debug_value.set(e.to_string());}
+                                }
                             }
-                        }
+                        },
+
+                        "Select DLL"
                     }
                 }
 
                 li {
-                    display: "flex",
-                    justify_content: "center",
-                    margin_top: "5px",
-                    margin_bottom: "5px",
-                    input {
-                        r#type: "button",
-                        value: "Inject!",
+                    class: "listchild",
+                    button {
+                        id: "injectdllbutton",
                         onclick: move |_|{
                             unsafe{
                                 println!("{pid:?} | {path:?}",);
@@ -87,15 +85,14 @@ fn app(cx: Scope) -> Element {
                                 }
                             }
                         
-                        }
+                        },
+
+                        "Inject!"
                     }
                 }
 
                 li {
-                    display: "flex",
-                    justify_content: "center",
-                    margin_top: "5px",
-                    margin_bottom: "5px",
+                    class: "listchild",
                     h1{ 
                         id: "debug",
                         "{debug_value}"
@@ -106,30 +103,41 @@ fn app(cx: Scope) -> Element {
     })
 }
 
-fn show_file_dialog() -> Result<String, std::io::Error> {
-    unsafe {
-        CoInitializeEx(
-            ptr::null(),
-            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
-        )?;
+unsafe fn show_all_process(){
+        
+
+    let hProcess = OpenProcess(PROCESS_QUERY_INFORMATION |
+        PROCESS_VM_READ, false, 0);
+}
+
+
+unsafe fn show_file_dialog() -> Result<String, FileSelectorError> {
+        if CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,).is_err(){return Err(FileSelectorError::COINITIALIZE);}
         let guid = &GUID::from_values(
             0xDC1C5A9C,
             0xE88A,
             0x4DDE,
             [0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7],
         ) as *const _ as *const GUID;
-        let hr: IFileDialog = CoCreateInstance(guid, None, CLSCTX_ALL)?;
-        hr.Show(None)?;
-        let hr = hr.GetResult()?;
-        let hr = hr.GetDisplayName(SIGDN_FILESYSPATH)?;
-        let hr = String::from_utf16_lossy(slice::from_raw_parts(hr.0, 257 as usize))
-            .split_once("\0")
-            .unwrap()
-            .0
-            .to_string();
+        let hr: IFileDialog = match CoCreateInstance(guid, None, CLSCTX_ALL){
+            Ok(fldialog) => fldialog,
+            Err(_) => return Err(FileSelectorError::COCREATEINSTANCE),
+        };
+        if hr.Show(None).is_err() {return Err(FileSelectorError::SHOWFILEDIALOG);}
+        let hr = match hr.GetResult(){
+            Ok(result) => result,
+            Err(_) => return Err(FileSelectorError::GETFILEPATH),
+        };
+        let hr = match hr.GetDisplayName(SIGDN_FILESYSPATH){
+            Ok(path) => path,
+            Err(_) => return Err(FileSelectorError::GETFILEPATH),
+        };
+        let hr = match String::from_utf16_lossy(slice::from_raw_parts(hr.0, 257 as usize)).split_once("\0"){
+            Some(path) => path.0.to_string(),
+            None => return Err(FileSelectorError::GETFILEPATH),
+        };
         CoUninitialize();
         Ok(hr)
-    }
 }
 
 unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
@@ -183,41 +191,4 @@ unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
     println!("Dll injected at {proccess_dll_path:?}");
 
     Ok(())
-}
-
-enum InjectorError {
-    PID,
-    MODULEHANDLE,
-    PROCADRESS,
-    REMOTETHREAD,
-}
-
-impl fmt::Display for InjectorError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                InjectorError::PID => "PID error",
-                InjectorError::MODULEHANDLE => "MODULE_HANDLE error",
-                InjectorError::PROCADRESS => "PROCADRESS error",
-                InjectorError::REMOTETHREAD => "REMOTE_THREAD error",
-            }
-        )
-    }
-}
-
-impl fmt::Debug for InjectorError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                InjectorError::PID => "PID error",
-                InjectorError::MODULEHANDLE => "MODULE_HANDLE error",
-                InjectorError::PROCADRESS => "PROCADRESS error",
-                InjectorError::REMOTETHREAD => "REMOTE_THREAD error",
-            }
-        )
-    }
 }

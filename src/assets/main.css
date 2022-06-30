@@ -1,0 +1,36 @@
+html{
+    background-color: #282A35;
+}
+
+
+button{
+    background-color: #0496FF;
+    border-radius: 10px;
+    border: 0;
+    width: 140px;
+    height: 30px;
+    font-size: 18px;
+}
+
+button:hover{
+    background-color: #3199e4;
+}
+
+
+
+#maindiv{
+    display: flex;
+    justify-content: center;
+}
+
+#listparent{
+    padding: 0px;
+    list-style-type: none;
+}
+
+.listchild{
+    display: flex;
+    justify-content: center;
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
