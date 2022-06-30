@@ -1,0 +1,57 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    name: (${{ matrix.target }}, ${{ matrix.cfg_release_channel }})
+    env:
+      CFG_RELEASE_CHANNEL: ${{ matrix.cfg_release_channel }}
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix:
+        target: [i686-pc-windows-gnu, x86_64-pc-windows-gnu]
+        cfg_release_channel: [stable]
+
+    steps:
+    - name: disable git eol translation
+      run: git config --global core.autocrlf false
+
+    - name: checkout
+      uses: actions/checkout@v3
+
+    - name: Add mingw32 to path for i686-gnu
+      run: echo "C:\msys64\mingw32\bin" >> $GITHUB_PATH
+      if: matrix.target == 'i686-pc-windows-gnu' && matrix.channel == 'stable'
+      shell: bash
+
+    - name: Add mingw64 to path for x86_64-gnu
+      run: echo "C:\msys64\mingw64\bin" >> $GITHUB_PATH
+      if: matrix.target == 'x86_64-pc-windows-gnu' && matrix.channel == 'stable'
+      shell: bash
+    - name: Build and Test
+      shell: cmd
+      run: |
+        set "RUSTFLAGS=-D warnings"
+        set "RUSTFMT_CI=1"
+
+        :: Print version information
+        rustc -Vv || exit /b 1
+        cargo -V || exit /b 1
+
+        :: Build and test main crate
+        cargo build --locked || exit /b 1
+        cargo test || exit /b 1
+
+        :: Build and test other crates
+        cd config_proc_macro || exit /b 1
+        cargo build --locked || exit /b 1
+        cargo test || exit /b 1
