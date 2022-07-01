@@ -1,36 +1,41 @@
 pub mod error;
 
+use std::{ffi::c_void, mem, ptr, slice};
 
-use std::{ffi::c_void, ptr, slice, mem};
-
-use dioxus::{prelude::*, desktop::tao::dpi::LogicalSize};
-use error::{InjectorError, FileSelectorError};
+use dioxus::{desktop::tao::dpi::LogicalSize, prelude::*};
+use error::{FileSelectorError, InjectorError};
 use windows::{
     core::GUID,
     Win32::{
+        Foundation::{CloseHandle, HINSTANCE},
         Security::SECURITY_ATTRIBUTES,
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL,
                 COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
             },
-            Diagnostics::Debug::{WriteProcessMemory},
+            Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE},
-            Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
-            WindowsProgramming::INFINITE, ProcessStatus::K32EnumProcesses,
+            ProcessStatus::{K32EnumProcessModules, K32EnumProcesses, K32GetModuleBaseNameA},
+            Threading::{
+                CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS,
+                PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+            },
+            WindowsProgramming::INFINITE,
         },
-        UI::Shell::{IFileDialog, SIGDN_FILESYSPATH}, Foundation::GetLastError,
+        UI::Shell::{IFileDialog, SIGDN_FILESYSPATH},
     },
 };
 
 fn main() {
-    dioxus::desktop::launch_cfg(app, |c| c.with_window(|w| {
-        w
-        .with_title("DLL Injector")
-        .with_resizable(false)
-        .with_inner_size(LogicalSize::new(320.0, 320.0))
-    }));
+    dioxus::desktop::launch_cfg(app, |c| {
+        c.with_window(|w| {
+            w.with_title("DLL Injector")
+                .with_resizable(false)
+                .with_inner_size(LogicalSize::new(320.0, 320.0))
+        })
+    });
 }
 
 fn app(cx: Scope) -> Element {
@@ -38,22 +43,25 @@ fn app(cx: Scope) -> Element {
     let path = use_state(&cx, || String::new());
     let debug_value = use_state(&cx, || String::new());
 
-    let process = unsafe{
-        show_all_process().unwrap().into_iter().map(|proc|{
-            rsx!{
-                li{
-                    class: "processlistchild",
+    let process = unsafe {
+        show_all_process()
+            .unwrap()
+            .into_iter()
+            .map(|(proc_pid, proc_name)| {
+                rsx! {
+                    li{
+                        class: "processlistchild",
 
-                    onclick: move |_|{
-                        pid.set(proc);
-                        debug_value.set(format!("Selected PID: {proc}"))
-                    },
+                        onclick: move |_|{
+                            pid.set(proc_pid);
+                            debug_value.set(format!("Selected PID: {proc_pid}"))
+                        },
 
-                    "{proc}"
-                   
+                        "{proc_name} | {proc_pid}"
+
+                    }
                 }
-            }
-        })
+            })
     };
     cx.render(rsx! {
         style { [include_str!("./assets/main.css")] }
@@ -61,17 +69,18 @@ fn app(cx: Scope) -> Element {
                 id: "maindiv",
             ul{
                 id: "listparent",
-
                 div{
                     id: "processlistdiv",
-                    ul{
+                        ul{
                         id: "processlist",
-                        
-
+                            
+    
                         process
                     }
-                    
+                        
                 }
+                
+                
 
                 li {
                     class: "listchild",
@@ -111,59 +120,116 @@ fn app(cx: Scope) -> Element {
 
                 li {
                     class: "listchild",
-                    h1{ 
-                        id: "debug",
-                        "{debug_value}"
-                    }
+                        p{ 
+                            id: "debug",
+                            "{debug_value}"
+                        }
+                
+                    
                 }
             }
     }
     })
 }
 
-unsafe fn show_all_process() -> Option<Vec<u32>>{
-    let mut a_processes = [0u32;1024];
+unsafe fn show_all_process() -> Option<Vec<(u32, String)>> {
+    let mut a_processes = [0u32; 1024];
     let mut cb_needed = 0u32;
-    if !K32EnumProcesses(&mut a_processes as *mut _ as *mut u32, mem::size_of_val(&a_processes) as u32, &mut cb_needed).as_bool(){
-        println!("{:?}", GetLastError());
+    if !K32EnumProcesses(
+        &mut a_processes as *mut _ as *mut u32,
+        mem::size_of_val(&a_processes) as u32,
+        &mut cb_needed,
+    )
+    .as_bool()
+    {
         return None;
     }
-    //let c_processes = cb_needed as usize/mem::size_of::<u32>();
-    let mut vec = a_processes.iter().filter_map(|proc| if *proc != 0{Some(*proc)}else{None}).collect::<Vec<u32>>();
-    vec.sort();
-    Some(vec)
+    let mut vec = a_processes
+        .iter()
+        .filter_map(|proc| {
+            if *proc != 0 {
+                let h_process =
+                    OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, *proc);
+                if let Ok(h_process) = h_process {
+                    let mut h_mod = HINSTANCE(0);
+                    let mut cb_needed = 0u32;
+                    if K32EnumProcessModules(
+                        h_process,
+                        &mut h_mod,
+                        mem::size_of_val(&h_mod) as u32,
+                        &mut cb_needed,
+                    )
+                    .as_bool()
+                    {
+                        let mut proc_name_chars = [0; 260];
+                        K32GetModuleBaseNameA(h_process, h_mod, &mut proc_name_chars);
+                        CloseHandle(h_process);
+                        let mut length = 260;
 
-    
+                        //Maybe split can be used in here
+                        'trim_end: for i in 0..259 {
+                            if proc_name_chars[259 - i] == 0 && length > 0 {
+                                length -= 1;
+                            } else {
+                                break 'trim_end;
+                            }
+                        }
+                        return Some((
+                            *proc,
+                            String::from_utf8_lossy(&proc_name_chars[0..length]).to_string(),
+                        ));
+                    }
+                    CloseHandle(h_process);
+                }
+
+                None
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<(u32, String)>>();
+    vec.sort_by(|(a, _), (b, _)| a.cmp(b));
+    Some(vec)
 }
 
-
 unsafe fn show_file_dialog() -> Result<String, FileSelectorError> {
-        if CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,).is_err(){return Err(FileSelectorError::COINITIALIZE);}
-        let guid = &GUID::from_values(
-            0xDC1C5A9C,
-            0xE88A,
-            0x4DDE,
-            [0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7],
-        ) as *const _ as *const GUID;
-        let hr: IFileDialog = match CoCreateInstance(guid, None, CLSCTX_ALL){
-            Ok(fldialog) => fldialog,
-            Err(_) => return Err(FileSelectorError::COCREATEINSTANCE),
-        };
-        if hr.Show(None).is_err() {return Err(FileSelectorError::SHOWFILEDIALOG);}
-        let hr = match hr.GetResult(){
-            Ok(result) => result,
-            Err(_) => return Err(FileSelectorError::GETFILEPATH),
-        };
-        let hr = match hr.GetDisplayName(SIGDN_FILESYSPATH){
-            Ok(path) => path,
-            Err(_) => return Err(FileSelectorError::GETFILEPATH),
-        };
-        let hr = match String::from_utf16_lossy(slice::from_raw_parts(hr.0, 257 as usize)).split_once("\0"){
-            Some(path) => path.0.to_string(),
-            None => return Err(FileSelectorError::GETFILEPATH),
-        };
-        CoUninitialize();
-        Ok(hr)
+    if CoInitializeEx(
+        ptr::null(),
+        COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+    )
+    .is_err()
+    {
+        return Err(FileSelectorError::COINITIALIZE);
+    }
+    let guid = &GUID::from_values(
+        0xDC1C5A9C,
+        0xE88A,
+        0x4DDE,
+        [0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7],
+    ) as *const _ as *const GUID;
+    let hr: IFileDialog = match CoCreateInstance(guid, None, CLSCTX_ALL) {
+        Ok(fldialog) => fldialog,
+        Err(_) => return Err(FileSelectorError::COCREATEINSTANCE),
+    };
+    if hr.Show(None).is_err() {
+        return Err(FileSelectorError::SHOWFILEDIALOG);
+    }
+    let hr = match hr.GetResult() {
+        Ok(result) => result,
+        Err(_) => return Err(FileSelectorError::GETFILEPATH),
+    };
+    let hr = match hr.GetDisplayName(SIGDN_FILESYSPATH) {
+        Ok(path) => path,
+        Err(_) => return Err(FileSelectorError::GETFILEPATH),
+    };
+    let hr = match String::from_utf16_lossy(slice::from_raw_parts(hr.0, 260 as usize))
+        .split_once("\0")
+    {
+        Some(path) => path.0.to_string(),
+        None => return Err(FileSelectorError::GETFILEPATH),
+    };
+    CoUninitialize();
+    Ok(hr)
 }
 
 unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {

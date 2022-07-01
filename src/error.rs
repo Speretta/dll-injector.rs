@@ -1,6 +1,6 @@
 use std::fmt;
 
-pub enum FileSelectorError{
+pub enum FileSelectorError {
     COINITIALIZE,
     COCREATEINSTANCE,
     SHOWFILEDIALOG,
@@ -36,7 +36,6 @@ impl fmt::Debug for FileSelectorError {
         )
     }
 }
-
 
 pub enum InjectorError {
     PID,
