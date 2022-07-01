@@ -1,5 +1,8 @@
 html{
     background-color: #282A35;
+    height: 320px;
+    width: 320px;
+    overflow: hidden;
 }
 
 
@@ -21,11 +24,36 @@ button:hover{
 #maindiv{
     display: flex;
     justify-content: center;
+    
+}
+
+#processlistdiv{
+    height: 150px;
+    width: 300px;
+    overflow: overlay;
+    margin-bottom: 12px;
+}
+
+#processlist{
+    list-style-type: none;
+    display: grid;
+    justify-content: center;
+    padding: 0px;
+}
+
+.processlistchild{
+    display: inline;
+    margin-bottom: 5px;
+    background-color: #0496FF;
+    width: 200px;
+    float: left;
+    padding-left: 12px;
 }
 
 #listparent{
     padding: 0px;
     list-style-type: none;
+    margin: 9px;
 }
 
 .listchild{

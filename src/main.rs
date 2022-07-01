@@ -1,7 +1,7 @@
 pub mod error;
 
 
-use std::{ffi::c_void, ptr, slice};
+use std::{ffi::c_void, ptr, slice, mem};
 
 use dioxus::{prelude::*, desktop::tao::dpi::LogicalSize};
 use error::{InjectorError, FileSelectorError};
@@ -14,13 +14,13 @@ use windows::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL,
                 COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
             },
-            Diagnostics::Debug::{WriteProcessMemory, SymEnumProcesses},
+            Diagnostics::Debug::{WriteProcessMemory},
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE},
             Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
-            WindowsProgramming::INFINITE,
+            WindowsProgramming::INFINITE, ProcessStatus::K32EnumProcesses,
         },
-        UI::Shell::{IFileDialog, SIGDN_FILESYSPATH},
+        UI::Shell::{IFileDialog, SIGDN_FILESYSPATH}, Foundation::GetLastError,
     },
 };
 
@@ -37,22 +37,40 @@ fn app(cx: Scope) -> Element {
     let pid = use_state(&cx, || 0u32);
     let path = use_state(&cx, || String::new());
     let debug_value = use_state(&cx, || String::new());
+
+    let process = unsafe{
+        show_all_process().unwrap().into_iter().map(|proc|{
+            rsx!{
+                li{
+                    class: "processlistchild",
+
+                    onclick: move |_|{
+                        pid.set(proc);
+                        debug_value.set(format!("Selected PID: {proc}"))
+                    },
+
+                    "{proc}"
+                   
+                }
+            }
+        })
+    };
     cx.render(rsx! {
         style { [include_str!("./assets/main.css")] }
         div {
                 id: "maindiv",
             ul{
                 id: "listparent",
-                
-                li {
-                    class: "listchild",
-                    input {
-                        placeholder: "PID number",
-                        r#type: "number",
-                        onchange:move |event|{
-                            pid.set(event.value.parse().unwrap());
-                        }
+
+                div{
+                    id: "processlistdiv",
+                    ul{
+                        id: "processlist",
+                        
+
+                        process
                     }
+                    
                 }
 
                 li {
@@ -103,8 +121,19 @@ fn app(cx: Scope) -> Element {
     })
 }
 
-unsafe fn show_all_process(){
-    todo!()
+unsafe fn show_all_process() -> Option<Vec<u32>>{
+    let mut a_processes = [0u32;1024];
+    let mut cb_needed = 0u32;
+    if !K32EnumProcesses(&mut a_processes as *mut _ as *mut u32, mem::size_of_val(&a_processes) as u32, &mut cb_needed).as_bool(){
+        println!("{:?}", GetLastError());
+        return None;
+    }
+    //let c_processes = cb_needed as usize/mem::size_of::<u32>();
+    let mut vec = a_processes.iter().filter_map(|proc| if *proc != 0{Some(*proc)}else{None}).collect::<Vec<u32>>();
+    vec.sort();
+    Some(vec)
+
+    
 }
 
 
