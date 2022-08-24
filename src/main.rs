@@ -1,14 +1,13 @@
 pub mod error;
 
-use std::{ffi::c_void, mem, ptr, slice};
+use std::{ffi::{c_void, CString}, mem, ptr, slice};
 
 use dioxus::{desktop::tao::dpi::LogicalSize, prelude::*};
 use error::{FileSelectorError, InjectorError};
 use windows::{
-    core::GUID,
+    core::{GUID, PCSTR},
     Win32::{
         Foundation::{CloseHandle, HINSTANCE},
-        Security::SECURITY_ATTRIBUTES,
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL,
@@ -16,7 +15,7 @@ use windows::{
             },
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE},
+            Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE, MEM_RESERVE},
             ProcessStatus::{K32EnumProcessModules, K32EnumProcesses, K32GetModuleBaseNameA},
             Threading::{
                 CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS,
@@ -33,7 +32,7 @@ fn main() {
         c.with_window(|w| {
             w.with_title("DLL Injector")
                 .with_resizable(false)
-                .with_inner_size(LogicalSize::new(320.0, 320.0))
+                .with_inner_size(LogicalSize::new(320.0, 350.0))
         })
     });
 }
@@ -42,40 +41,65 @@ fn app(cx: Scope) -> Element {
     let pid = use_state(&cx, || 0u32);
     let path = use_state(&cx, || String::new());
     let debug_value = use_state(&cx, || String::new());
+    let search_value = use_state(&cx, || String::new());
 
-    let process = unsafe {
-        show_all_process()
-            .unwrap()
-            .into_iter()
-            .map(|(proc_pid, proc_name)| {
-                rsx! {
-                    li{
-                        class: "processlistchild",
 
-                        onclick: move |_|{
-                            pid.set(proc_pid);
-                            debug_value.set(format!("Selected PID: {proc_pid}"))
-                        },
-
-                        "{proc_name} | {proc_pid}"
-
-                    }
-                }
-            })
-    };
     cx.render(rsx! {
         style { [include_str!("./assets/main.css")] }
         div {
                 id: "maindiv",
+            
+            
+
             ul{
                 id: "listparent",
+
+                li{
+                    class: "listchild",
+                    label{
+                        id: "search_label",
+
+                        "Process Name"
+                    }
+                }
+
+                li{
+                    class: "listchild",
+                    
+                    input{
+                        oninput: move |e| search_value.set(e.value.clone()),
+                        
+                    }
+                }
+
                 div{
                     id: "processlistdiv",
                         ul{
                         id: "processlist",
                             
-    
-                        process
+                        unsafe{
+                            show_all_process().unwrap()
+                            .into_iter()
+                            .filter(|(_, proc_name)|{
+                                proc_name.to_ascii_uppercase().contains(search_value.to_ascii_uppercase().as_str()) || search_value.is_empty()
+                            })
+                            .map(|(proc_pid, proc_name)|{
+                                rsx! {
+                                    li{
+                                        class: "processlistchild",
+                
+                                        onclick: move |_|{
+                                            pid.set(proc_pid);
+                                            debug_value.set(format!("Selected PID: {proc_pid}"))
+                                        },
+                
+                                        "{proc_name} | {proc_pid}"
+                
+                                    }
+                                }
+                            })
+                        }
+                        
                     }
                         
                 }
@@ -222,7 +246,7 @@ unsafe fn show_file_dialog() -> Result<String, FileSelectorError> {
         Ok(path) => path,
         Err(_) => return Err(FileSelectorError::GETFILEPATH),
     };
-    let hr = match String::from_utf16_lossy(slice::from_raw_parts(hr.0, 260 as usize))
+    let hr = match String::from_utf16_lossy(slice::from_raw_parts(hr.0, 260))
         .split_once("\0")
     {
         Some(path) => path.0.to_string(),
@@ -233,6 +257,13 @@ unsafe fn show_file_dialog() -> Result<String, FileSelectorError> {
 }
 
 unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
+
+    
+    let dll_path_len = dll_path.as_bytes().len();
+    
+    println!("{dll_path_len}");
+
+
     let h_process = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
         Ok(h_process) => h_process,
         Err(_) => return Err(InjectorError::PID),
@@ -240,9 +271,9 @@ unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
 
     let proccess_dll_path = VirtualAllocEx(
         h_process,
-        0 as *const c_void,
-        dll_path.len(),
-        MEM_COMMIT,
+        ptr::null(),
+        dll_path_len,
+        MEM_RESERVE | MEM_COMMIT,
         PAGE_READWRITE,
     );
 
@@ -250,27 +281,37 @@ unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
         h_process,
         proccess_dll_path,
         dll_path as *const _ as *const c_void,
-        dll_path.len(),
-        0 as *mut usize,
+        dll_path_len,
+        ptr::null_mut(),
     );
 
-    let module_handle_a = match GetModuleHandleA("Kernel32.dll") {
+    let kernel32_cstring = match CString::new("Kernel32.dll"){
+        Ok(kernel32_cstring) => kernel32_cstring,
+        Err(_) => return Err(InjectorError::MODULEHANDLE),
+    };
+
+    let module_handle_a = match GetModuleHandleA(PCSTR(kernel32_cstring.as_ptr() as *const u8)) {
         Ok(module_handle_a) => module_handle_a,
         Err(_) => return Err(InjectorError::MODULEHANDLE),
     };
 
-    let kernel_proc = match GetProcAddress(module_handle_a, "LoadLibraryA") {
+    let loadlibrary_cstring = match CString::new("LoadLibraryA"){
+        Ok(loadlibrary_cstring) => loadlibrary_cstring,
+        Err(_) => return Err(InjectorError::PROCADRESS),
+    };
+
+    let kernel_proc = match GetProcAddress(module_handle_a, PCSTR(loadlibrary_cstring.as_ptr() as *const u8)) {
         Some(kernel_proc) => kernel_proc,
         None => return Err(InjectorError::PROCADRESS),
     };
     let h_load_thread = match CreateRemoteThread(
         h_process,
-        0 as *const SECURITY_ATTRIBUTES,
+        ptr::null(),
         0,
         Some(*(&kernel_proc as *const _ as *const extern "system" fn(*mut c_void) -> u32)),
         proccess_dll_path,
         0,
-        0 as *mut u32,
+        ptr::null_mut(),
     ) {
         Ok(module_handle_a) => module_handle_a,
         Err(_) => return Err(InjectorError::REMOTETHREAD),
@@ -278,7 +319,9 @@ unsafe fn start_inject(dll_path: &str, pid: u32) -> Result<(), InjectorError> {
 
     WaitForSingleObject(h_load_thread, INFINITE);
 
-    VirtualFreeEx(h_process, proccess_dll_path, dll_path.len(), MEM_RELEASE);
+    VirtualFreeEx(h_process, proccess_dll_path, dll_path_len, MEM_RELEASE);
+
+    CloseHandle(h_process);
 
     println!("Dll injected at {proccess_dll_path:?}");
 

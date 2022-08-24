@@ -38,6 +38,7 @@ impl fmt::Debug for FileSelectorError {
 }
 
 pub enum InjectorError {
+    DLLPATH,
     PID,
     MODULEHANDLE,
     PROCADRESS,
@@ -50,6 +51,7 @@ impl fmt::Display for InjectorError {
             f,
             "{}",
             match self {
+                InjectorError::DLLPATH => "DLL Path error",
                 InjectorError::PID => "PID error",
                 InjectorError::MODULEHANDLE => "MODULE_HANDLE error",
                 InjectorError::PROCADRESS => "PROCADRESS error",
@@ -65,6 +67,7 @@ impl fmt::Debug for InjectorError {
             f,
             "{}",
             match self {
+                InjectorError::DLLPATH => "DLL Path error",
                 InjectorError::PID => "PID error",
                 InjectorError::MODULEHANDLE => "MODULE_HANDLE error",
                 InjectorError::PROCADRESS => "PROCADRESS error",
